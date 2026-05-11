@@ -165,11 +165,17 @@ class OpenrfidApiController(MoonrakerController):
             if event is None:
                 continue
             try:
+                # Per Moonraker's agent protocol, agents emit events via
+                # `connection.send_event` with `{event, data}`. Moonraker
+                # stamps the agent name from the connection identity and
+                # rebroadcasts to subscribers as `notify_agent_event`
+                # notifications. Sending `notify_agent_event` directly
+                # is treated as an RPC call and rejected with -32601.
+                # https://moonraker.readthedocs.io/en/latest/external_api/extensions/#send-an-agent-event
                 self.send_message({
                     "jsonrpc": "2.0",
-                    "method": "notify_agent_event",
+                    "method": "connection.send_event",
                     "params": {
-                        "agent": AGENT_NAME,
                         "event": "openrfid/scan",
                         "data": event,
                     },
