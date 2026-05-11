@@ -11,9 +11,23 @@ from reader.rfid_reader import RfidReader
 from exporters.exporter import Exporter, ExporterEvent
 from reader.scan_result import ScanResult
 from filament import GenericFilament
-from typing import cast
+from typing import cast, Any
+import threading
 import time
 import logging
+
+
+class _PendingWrite:
+    """State for a write request awaiting drain by :meth:`Runtime.loop`."""
+
+    __slots__ = ("start_page", "data", "event", "result")
+
+    def __init__(self, start_page: int, data: bytes):
+        self.start_page = start_page
+        self.data = data
+        self.event = threading.Event()
+        self.result: dict[str, Any] | None = None
+
 
 class Runtime:
     def __init__(self):
@@ -42,10 +56,95 @@ class Runtime:
 
         self.read_retries_left = [0] * len(self.rfid_readers)
 
+        # Pending NTAG write requests keyed by slot index. Populated via
+        # :meth:`submit_write` and drained inside :meth:`loop` so the write
+        # happens on the read thread (single-threaded RFID bus access).
+        self._pending_writes: dict[int, _PendingWrite] = {}
+        self._pending_write_lock = threading.Lock()
+
+        # Most recent scan event per slot. Populated whenever exporters are
+        # notified so the Moonraker agent API can answer ``list_channels``
+        # without re-scanning.
+        self.last_scans: dict[int, dict] = {}
+
     def _notify_exporters(self, scan: ScanResult|None, filament: GenericFilament|None, reader: RfidReader, event: ExporterEvent):
+        slot = getattr(reader, "slot", None)
+        if slot is not None:
+            self.last_scans[int(slot)] = {
+                "event": event.value,
+                "ts": time.time(),
+                "slot": int(slot),
+                "reader": getattr(reader, "name", None),
+                "uid": scan.uid.hex().upper() if scan is not None else None,
+                "tag_type": scan.tag_type.name if scan is not None else None,
+                "filament": filament.to_dict() if filament is not None else None,
+            }
+
         for exporter in self.exporters:
             if exporter.has_event(event):
                 exporter.export_data(scan, filament, reader)
+
+    # ------------------------------------------------------------------
+    # Pending NTAG writes (used by the OpenRFID agent API).
+    # ------------------------------------------------------------------
+    def submit_write(self, slot: int, data: bytes, start_page: int = 4, timeout: float = 10.0) -> dict:
+        """Queue an NTAG write for ``slot`` and block until the read loop
+        services it (or ``timeout`` elapses).
+
+        Returns a result dict with at least ``ok`` (bool) and ``status``
+        (int|None — FM175XX status code) and optional ``error`` (str).
+        """
+        if slot < 0 or slot >= len(self.rfid_readers):
+            return {"ok": False, "error": f"invalid slot {slot}"}
+        if not isinstance(data, (bytes, bytearray)):
+            return {"ok": False, "error": "data must be bytes"}
+        if len(data) == 0 or len(data) % 4 != 0:
+            return {"ok": False, "error": "data length must be a positive multiple of 4 bytes"}
+
+        pending = _PendingWrite(start_page, bytes(data))
+        with self._pending_write_lock:
+            self._pending_writes[slot] = pending
+
+        # Use the existing scan-trigger path so auto/manual modes both wake.
+        self.start_reading_tag(slot)
+
+        if not pending.event.wait(timeout=timeout):
+            with self._pending_write_lock:
+                self._pending_writes.pop(slot, None)
+            return {"ok": False, "error": "timeout waiting for write"}
+
+        return pending.result or {"ok": False, "error": "no result"}
+
+    def _drain_pending_write(self, slot: int, reader: RfidReader) -> bool:
+        """If a write is pending for ``slot``, perform it now and signal the
+        waiting submitter. Returns ``True`` when a write was handled (and the
+        normal read for this iteration should be skipped).
+        """
+        with self._pending_write_lock:
+            pending = self._pending_writes.pop(slot, None)
+        if pending is None:
+            return False
+
+        write = getattr(reader, "write_ntag_pages", None)
+        if not callable(write):
+            pending.result = {"ok": False, "error": "reader does not support NTAG writes"}
+            pending.event.set()
+            return True
+
+        try:
+            status = write(pending.start_page, pending.data)
+            pending.result = {
+                "ok": status == 0,
+                "status": status,
+                "start_page": pending.start_page,
+                "bytes_written": len(pending.data),
+            }
+        except Exception as exc:
+            logging.exception("NTAG write failed on slot %d", slot)
+            pending.result = {"ok": False, "error": str(exc)}
+        finally:
+            pending.event.set()
+        return True
 
     def start_reading_tag(self, slot: int):
         if slot < 0 or slot >= len(self.rfid_readers):
@@ -58,6 +157,12 @@ class Runtime:
     def loop(self):
         while True:
             for i, reader in enumerate(self.rfid_readers):
+                # Pending writes take priority over reads — they have an
+                # impatient caller blocked on them. Skip the read this tick.
+                if self._drain_pending_write(i, reader):
+                    self.read_retries_left[i] = 0
+                    continue
+
                 if not self.config.auto_read_mode and self.read_retries_left[i] <= 0:
                     continue
 

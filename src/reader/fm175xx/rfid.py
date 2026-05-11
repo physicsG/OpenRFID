@@ -82,6 +82,70 @@ class Fm175xx(MifareClassicReader, MifareUltralightReader):
 
         return bytes(data.out_data)
 
+    def write_ntag_pages(self, start_page: int, data: bytes) -> int:
+        """Write ``data`` to NTAG21x user pages starting at ``start_page``.
+
+        ``data`` must be a multiple of 4 bytes (one NTAG page). The carrier
+        wave must be enabled (i.e. the caller wraps this in
+        :meth:`start_session` / :meth:`end_session`). Returns one of the
+        ``FM175XX_*`` constants from :mod:`reader.fm175xx.constants`.
+        """
+        if not isinstance(data, (bytes, bytearray)):
+            return Constants.FM175XX_PARAM_ERR
+        if len(data) == 0 or len(data) % Constants.FM175XX_NTAG215_BYTES_PER_PAGE != 0:
+            return Constants.FM175XX_PARAM_ERR
+
+        total_pages = len(data) // Constants.FM175XX_NTAG215_BYTES_PER_PAGE
+        end_page = start_page + total_pages - 1
+        if start_page < Constants.FM175XX_NTAG215_USER_START_PAGE or end_page > Constants.FM175XX_NTAG215_USER_END_PAGE:
+            self.logger.error(
+                "NTAG write out of user-data range: pages %d..%d (allowed %d..%d)",
+                start_page,
+                end_page,
+                Constants.FM175XX_NTAG215_USER_START_PAGE,
+                Constants.FM175XX_NTAG215_USER_END_PAGE,
+            )
+            return Constants.FM175XX_PARAM_ERR
+
+        ret, _UID, _ATQA, _BCC, _SAK = self.__reader_a_activate()
+        if ret != Constants.FM175XX_OK:
+            self.logger.error("NTAG write activate failed: %d", ret)
+            return ret
+
+        for i in range(total_pages):
+            page_no = start_page + i
+            chunk = list(data[i * 4:(i + 1) * 4])
+            wret = self.__ntag_page_write(page_no, chunk)
+            if wret != Constants.FM175XX_OK:
+                self.logger.error("NTAG write failed at page %d: %d", page_no, wret)
+                return wret
+
+        return Constants.FM175XX_OK
+
+    # Reader-A: NTAG/Ultralight, write a page (4 bytes)
+    def __ntag_page_write(self, page: int, data: list[int]) -> int:
+        cmd = Fm175xxCmdMetaData()
+        cmd.send_crc_en = Constants.FM175XX_SET
+        cmd.recv_crc_en = Constants.FM175XX_RESET
+        cmd.send_buff = [0xA2, page & 0xFF, data[0] & 0xFF, data[1] & 0xFF, data[2] & 0xFF, data[3] & 0xFF]
+        cmd.recv_buff = [0]
+        cmd.bytes_to_send = 6
+        cmd.bits_to_send = 0
+        cmd.bits_to_recv = 0
+        cmd.bytes_to_recv = 1
+        cmd.timeout = 10
+        cmd.cmd = Constants.FM175XX_CMD_TRANSCEIVE
+
+        result = self.__command_exe(cmd)
+        if result.err_code != Constants.FM175XX_OK:
+            return result.err_code
+        # NTAG ACK: 4 bits, low nibble == 0x0A
+        if cmd.bits_recved != 4:
+            return Constants.FM175XX_CARD_COMM_ERR
+        if (cmd.recv_buff[0] & 0x0F) != 0x0A:
+            return Constants.FM175XX_CARD_COMM_ERR
+        return Constants.FM175XX_OK
+
     # read register
     def __register_read(self, addr:int) -> int:
         addr = (addr << 1) | 0x80

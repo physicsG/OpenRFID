@@ -55,3 +55,19 @@ class GpioEnabledRfidReader(MifareClassicReader, MifareUltralightReader):
             return self.rfid_reader.read_mifare_ultralight(scan_result)
         
         return None
+
+    def write_ntag_pages(self, start_page: int, data: bytes) -> int | None:
+        """Write NTAG21x pages via the inner reader, framed by start/end
+        session so the slot's GPIO pins and the carrier wave are correctly
+        toggled. Returns the FM175XX status code from the inner reader, or
+        ``None`` if the inner reader does not support NTAG writes.
+        """
+        write = getattr(self.rfid_reader, "write_ntag_pages", None)
+        if not callable(write):
+            return None
+
+        self.start_session()
+        try:
+            return write(start_page, data)
+        finally:
+            self.end_session()
