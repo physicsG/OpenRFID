@@ -50,6 +50,7 @@ class OpenrfidApiController(MoonrakerController):
         self._exporter: OpenrfidAgentEventExporter | None = None
         self._broadcast_thread: threading.Thread | None = None
         self._stop_broadcast = threading.Event()
+        self._send_lock = threading.Lock()
 
         self._handlers: dict[str, Callable[[dict], Any]] = {
             REMOTE_METHOD_LIST_CHANNELS: self._handle_list_channels,
@@ -58,6 +59,10 @@ class OpenrfidApiController(MoonrakerController):
             REMOTE_METHOD_CLEAR_TAG: self._handle_clear_tag,
             REMOTE_METHOD_TIGERTAG_ENCODE: self._handle_tigertag_encode,
         }
+
+    def send_message(self, message: Any):
+        with self._send_lock:
+            super().send_message(message)
 
     # ------------------------------------------------------------------
     # Wiring helpers
