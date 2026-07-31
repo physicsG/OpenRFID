@@ -77,7 +77,7 @@ class TigerTagProcessor(MifareUltralightTagProcessor):
             if len(user_data) >= Constants.OFF_MESSAGE + Constants.MESSAGE_LENGTH:
                 raw_msg = user_data[Constants.OFF_MESSAGE:Constants.OFF_MESSAGE + Constants.MESSAGE_LENGTH]
                 try:
-                    message = raw_msg.rstrip(b'\x00').decode('utf-8', errors='replace').strip()
+                    message = raw_msg.rstrip(b'\x00').decode('utf-8', errors='replace')
                 except Exception:
                     message = ""
 

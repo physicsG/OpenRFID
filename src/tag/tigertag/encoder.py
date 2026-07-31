@@ -163,6 +163,16 @@ def _resolve_mfg_timestamp(mfg_raw: Any) -> int:
         return int(mfg_raw)
     if isinstance(mfg_raw, str) and mfg_raw.strip():
         s = mfg_raw.strip()
+        # Try fromisoformat first; replace trailing 'Z' with '+00:00' since
+        # Python < 3.11 does not parse 'Z' as UTC natively.
+        iso_s = s[:-1] + "+00:00" if s.endswith("Z") else s
+        try:
+            dt = datetime.fromisoformat(iso_s)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return int(dt.timestamp()) - Constants.TIGERTAG_EPOCH_OFFSET
+        except (ValueError, OverflowError):
+            pass
         for fmt in (
             "%Y-%m-%dT%H:%M:%S",
             "%Y-%m-%dT%H:%M",

@@ -103,6 +103,8 @@ class Runtime:
 
         pending = _PendingWrite(start_page, bytes(data))
         with self._pending_write_lock:
+            if slot in self._pending_writes:
+                return {"ok": False, "error": f"write already pending for slot {slot}"}
             self._pending_writes[slot] = pending
 
         # Use the existing scan-trigger path so auto/manual modes both wake.
@@ -133,12 +135,15 @@ class Runtime:
 
         try:
             status = write(pending.start_page, pending.data)
-            pending.result = {
-                "ok": status == 0,
-                "status": status,
-                "start_page": pending.start_page,
-                "bytes_written": len(pending.data),
-            }
+            if status is None:
+                pending.result = {"ok": False, "error": "reader does not support NTAG writes"}
+            else:
+                pending.result = {
+                    "ok": status == 0,
+                    "status": status,
+                    "start_page": pending.start_page,
+                    "bytes_written": len(pending.data),
+                }
         except Exception as exc:
             logging.exception("NTAG write failed on slot %d", slot)
             pending.result = {"ok": False, "error": str(exc)}

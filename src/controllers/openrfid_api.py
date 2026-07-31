@@ -199,6 +199,8 @@ class OpenrfidApiController(MoonrakerController):
 
     def _handle_scan_slot(self, params: dict) -> dict:
         slot = self._require_slot(params)
+        if slot < 0 or slot >= len(self.runtime.rfid_readers):
+            return {"ok": False, "error": f"invalid slot {slot}"}
         self.runtime.start_reading_tag(slot)
         return {"ok": True, "slot": slot}
 
