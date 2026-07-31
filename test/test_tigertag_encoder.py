@@ -150,6 +150,30 @@ def test_encoder_round_trip_preserves_legacy_spec_fields() -> None:
     assert filament.authentication["verification"] == "unsigned"
 
 
+def test_iso8601_offset_and_z_timestamps_normalize_to_the_same_instant() -> None:
+    offset_tag = validate_maker_payload(
+        encode({"manufacturing_date": "2026-04-03T02:30:00+02:30"})
+    )
+    utc_tag = validate_maker_payload(
+        encode({"manufacturing_date": "2026-04-03T00:00:00Z"})
+    )
+
+    assert offset_tag.timestamp == utc_tag.timestamp
+
+
+def test_message_whitespace_is_preserved_verbatim() -> None:
+    message = "  padded  "
+    payload = encode({"message": message})
+
+    assert validate_maker_payload(payload).custom_message == message
+    filament = _build_processor().process_tag(
+        _build_scan_result(),
+        _wrap_user_payload(payload),
+    )
+    assert filament is not None
+    assert filament.message == message
+
+
 def test_message_limit_is_28_utf8_bytes_without_partial_codepoints() -> None:
     ascii_payload = encode({"message": "x" * 28})
     assert ascii_payload[48:76] == b"x" * 28
