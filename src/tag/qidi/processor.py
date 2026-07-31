@@ -6,6 +6,8 @@ import logging
 from .constants import MATERIALS, COLORS
 
 class QidiTagProcessor(MifareClassicTagProcessor):
+    tag_format = "qidi"
+
     def __init__(self, config : dict):
         super().__init__(config)
 
@@ -53,6 +55,7 @@ class QidiTagProcessor(MifareClassicTagProcessor):
 
         return GenericFilament(
             source_processor=self.name,
+            tag_format=self.tag_format,
             unique_id=GenericFilament.generate_unique_id("QIDI", material_code, color_code, manufacturer_code),
             manufacturer="QIDI",
             type=type,

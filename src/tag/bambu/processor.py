@@ -9,6 +9,8 @@ import struct
 import tag.binary as binary
 
 class BambuTagProcessor(MifareClassicTagProcessor):
+    tag_format = "bambu"
+
     def __init__(self, config : dict):
         super().__init__(config)
 
@@ -116,6 +118,7 @@ class BambuTagProcessor(MifareClassicTagProcessor):
         
         return GenericFilament(
             source_processor=self.name,
+            tag_format=self.tag_format,
             unique_id=GenericFilament.generate_unique_id("Bambu Lab", filament_type, detailed_type, argb_color, production_datetime),
             manufacturer="Bambu",
             type=filament_type,

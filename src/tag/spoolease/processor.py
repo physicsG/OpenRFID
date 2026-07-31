@@ -7,6 +7,8 @@ from . import constants as Constants
 
 
 class SpooleaseTagProcessor(NdefTagProcessor):
+    tag_format = "spoolease"
+
     def __init__(self, config: dict):
         super().__init__(config)
 
@@ -69,6 +71,7 @@ class SpooleaseTagProcessor(NdefTagProcessor):
 
             return GenericFilament(
                 source_processor=self.name,
+                tag_format=self.tag_format,
                 unique_id=GenericFilament.generate_unique_id(
                     "SpoolEase", brand, material, subtype, *colors, weight_grams
                 ),

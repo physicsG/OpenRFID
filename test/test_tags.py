@@ -180,6 +180,18 @@ PROCESSOR_FIXTURES = {
     },
 }
 
+EXPECTED_TAG_FORMATS = {
+    "Anycubic": "anycubic",
+    "Bambu": "bambu",
+    "Creality": "creality",
+    "Elegoo": "elegoo",
+    "OpenSpool": "openspool",
+    "Qidi": "qidi",
+    "SpoolEase": "spoolease",
+    "Snapmaker": "snapmaker",
+    "Tigertag": "tigertag",
+}
+
 
 def _get_processor_fixture(folder_name: str) -> dict:
     if folder_name not in PROCESSOR_FIXTURES:
@@ -245,3 +257,22 @@ def test_tag_processor_fixture_matches_expected_output(fixture_path: Path) -> No
     actual = filament.to_dict()
 
     _assert_expected_matches_actual(expected, actual)
+    assert actual["tag_format"] == EXPECTED_TAG_FORMATS[folder_name]
+    assert isinstance(actual["present_fields"], list)
+    assert isinstance(actual["format_data"], dict)
+
+
+def test_all_concrete_processors_define_stable_tag_formats() -> None:
+    processor_types = {
+        AnycubicTagProcessor: "anycubic",
+        BambuTagProcessor: "bambu",
+        CrealityTagProcessor: "creality",
+        ElegooTagProcessor: "elegoo",
+        OpenspoolTagProcessor: "openspool",
+        QidiTagProcessor: "qidi",
+        SnapmakerTagProcessor: "snapmaker",
+        SpooleaseTagProcessor: "spoolease",
+        TigerTagProcessor: "tigertag",
+    }
+    for processor_type, tag_format in processor_types.items():
+        assert processor_type.tag_format == tag_format

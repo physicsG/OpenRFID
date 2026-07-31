@@ -7,6 +7,8 @@ from . import constants as Constants
 # Adapted from https://github.com/paxx12/SnapmakerU1-Extended-Firmware/blob/3c97d1d80309d817ad37f2daac8e436712cc7865/overlays/firmware-extended/13-rfid-support/root/home/lava/klipper/klippy/extras/filament_protocol_ndef.py
 
 class OpenspoolTagProcessor(NdefTagProcessor):
+    tag_format = "openspool"
+
     def __init__(self, config : dict):
         super().__init__(config)
 
@@ -76,6 +78,7 @@ class OpenspoolTagProcessor(NdefTagProcessor):
 
             return GenericFilament(
                 source_processor=self.name,
+                tag_format=self.tag_format,
                 unique_id=GenericFilament.generate_unique_id("OpenSpool", brand, main_type, subtype, color_argb),
                 manufacturer=brand,
                 type=main_type,
