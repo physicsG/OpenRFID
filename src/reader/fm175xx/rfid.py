@@ -1,13 +1,29 @@
 from tag.mifare_classic_tag_processor import TagAuthentication
-from tag.tag_types import tag_type_from_sak
+from tag.tag_types import TagType, tag_type_from_sak
 from . import constants as Constants
 from bus import SoftwareSPI, OutputPin
 from reader.mifare_classic_reader import MifareClassicReader
-from reader.mifare_ultralight_reader import MifareUltralightReader
+from reader.mifare_ultralight_reader import (
+    MifareUltralightReader,
+    TIGERTAG_INIT_ID,
+    TIGERTAG_MAKER_ID,
+    TIGERTAG_PLUS_ID,
+    TIGERTAG_OWNED_END_PAGE,
+    TIGERTAG_OWNED_LENGTH,
+    TIGERTAG_OWNED_START_PAGE,
+)
 from reader.scan_result import ScanResult
 from config import get_required_configurable_entity_by_name, TYPE_SOFTWARE_SPI, TYPE_OUTPUT_PIN
-from typing import cast
+from typing import Any, Callable, cast
 import time
+
+
+_NTAG21X_VERSION_MODELS = {
+    # GET_VERSION storage-size byte: (model, dynamic-lock page).
+    0x0F: ("NTAG213", 40),
+    0x11: ("NTAG215", 130),
+    0x13: ("NTAG216", 226),
+}
 
 # Reader command
 class Fm175xxCmdMetaData:
@@ -82,13 +98,12 @@ class Fm175xx(MifareClassicReader, MifareUltralightReader):
 
         return bytes(data.out_data)
 
-    def write_ntag_pages(self, start_page: int, data: bytes) -> int:
-        """Write ``data`` to NTAG21x user pages starting at ``start_page``.
+    def _write_ntag_pages_unchecked(self, start_page: int, data: bytes) -> int:
+        """Legacy general NTAG writer retained for low-level diagnostics.
 
-        ``data`` must be a multiple of 4 bytes (one NTAG page). The carrier
-        wave must be enabled (i.e. the caller wraps this in
-        :meth:`start_session` / :meth:`end_session`). Returns one of the
-        ``FM175XX_*`` constants from :mod:`reader.fm175xx.constants`.
+        This deliberately private method has no expected-UID, format or
+        read-back safeguards. Product/API writes must use
+        :meth:`write_tigertag_maker` or :meth:`clear_tigertag_maker`.
         """
         if not isinstance(data, (bytes, bytearray)):
             return Constants.FM175XX_PARAM_ERR
@@ -122,6 +137,436 @@ class Fm175xx(MifareClassicReader, MifareUltralightReader):
 
         return Constants.FM175XX_OK
 
+    @staticmethod
+    def _tag_operation_error(code: str, error: str, **details: Any) -> dict[str, Any]:
+        return {"ok": False, "code": code, "error": error, **details}
+
+    def _activate_expected_ultralight(
+        self,
+        expected_uid: bytes,
+    ) -> tuple[bytes | None, dict[str, Any] | None]:
+        ret, uid_raw, _atqa, _bcc, sak_raw = self.__reader_a_activate()
+        if ret != Constants.FM175XX_OK:
+            return None, self._tag_operation_error(
+                "tag_not_present",
+                "could not activate a tag",
+                status=ret,
+            )
+
+        uid = bytes(uid_raw)
+        tag_type = tag_type_from_sak(bytes(sak_raw))
+        if tag_type != TagType.MifareUltralight:
+            return None, self._tag_operation_error(
+                "wrong_tag_type",
+                "activated tag is not MIFARE Ultralight/NTAG hardware",
+                actual_uid=uid.hex().upper(),
+                actual_tag_type=tag_type.name,
+            )
+        if uid != expected_uid:
+            return None, self._tag_operation_error(
+                "uid_mismatch",
+                "activated tag UID does not match expected_uid",
+                expected_uid=expected_uid.hex().upper(),
+                actual_uid=uid.hex().upper(),
+            )
+        return uid, None
+
+    def _read_tigertag_owned_region(
+        self,
+    ) -> tuple[bytes | None, dict[str, Any] | None]:
+        data = bytearray()
+        for page in range(TIGERTAG_OWNED_START_PAGE, TIGERTAG_OWNED_END_PAGE + 1, 4):
+            result = self.__reader_a_ultralight_page_read(page)
+            if result.err_code != Constants.FM175XX_OK or len(result.out_data) != 16:
+                code = "capacity_probe_failed" if page == 20 else "read_failed"
+                message = (
+                    "tag does not expose writable user memory through page 23"
+                    if page == 20
+                    else f"failed to read TigerTag-owned region at page {page}"
+                )
+                return None, self._tag_operation_error(
+                    code,
+                    message,
+                    page=page,
+                    status=result.err_code,
+                )
+            data.extend(result.out_data)
+        return bytes(data[:TIGERTAG_OWNED_LENGTH]), None
+
+    def _validate_existing_tigertag(
+        self,
+        current: bytes,
+        allow_unrecognized: bool,
+        allow_legacy_migration: bool,
+        legacy_signature_prefix: bytes | None = None,
+    ) -> tuple[str | None, dict[str, Any] | None]:
+        header = int.from_bytes(current[:4], "big")
+        if header == TIGERTAG_PLUS_ID:
+            product_id = int.from_bytes(current[4:8], "big")
+            # The retired feature encoder used the Plus format ID, reserved
+            # product 0, and wrote a guaranteed zero signature prefix to pages
+            # 24..27. All three conditions are required for migration; a
+            # Plus-shaped tag without that exact read-only fingerprint stays
+            # protected even when an override is supplied.
+            if product_id == 0:
+                if legacy_signature_prefix != bytes(16):
+                    return None, self._tag_operation_error(
+                        "protected_tag_format",
+                        "TigerTag+ product 0 does not match the exact legacy OpenRFID v1 signature prefix",
+                        existing_header=f"0x{header:08X}",
+                        existing_product_id=product_id,
+                    )
+                if allow_legacy_migration:
+                    return "legacy_openrfid_v1", None
+                return None, self._tag_operation_error(
+                    "legacy_upgrade_required",
+                    "legacy unsigned TigerTag+ data requires the explicit legacy-migration override",
+                    existing_header=f"0x{header:08X}",
+                    existing_product_id=product_id,
+                )
+            return None, self._tag_operation_error(
+                "protected_tag_format",
+                "TigerTag+ is not writable by the Maker writer",
+                existing_header=f"0x{header:08X}",
+                existing_product_id=product_id,
+            )
+        if header == TIGERTAG_MAKER_ID:
+            return "maker", None
+        if header == TIGERTAG_INIT_ID:
+            return "init", None
+        if allow_unrecognized:
+            return "unrecognized", None
+        return None, self._tag_operation_error(
+            "unrecognized_tag",
+            "existing tag is neither TigerTag Maker nor TigerTag Init; explicit allow_unrecognized is required",
+            existing_header=f"0x{header:08X}",
+        )
+
+    def _read_legacy_signature_prefix(
+        self,
+    ) -> tuple[bytes | None, dict[str, Any] | None]:
+        result = self.__reader_a_ultralight_page_read(24)
+        if result.err_code != Constants.FM175XX_OK or len(result.out_data) != 16:
+            return None, self._tag_operation_error(
+                "legacy_probe_failed",
+                "could not verify pages 24..27 required for legacy OpenRFID v1 migration",
+                page=24,
+                status=result.err_code,
+            )
+        return bytes(result.out_data), None
+
+    def _preflight_tigertag_writable(
+        self,
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        """Fail closed on model, locks, CC access, or password protection.
+
+        The writer owns pages 4..23. NTAG21x static locks cover pages 4..15;
+        dynamic locks cover page 16 onward with model-specific granularity.
+        Every check happens before page 4 is invalidated.
+        """
+        version_result = self.__ntag_get_version()
+        version = bytes(version_result.out_data)
+        if (
+            version_result.err_code != Constants.FM175XX_OK
+            or len(version) != 8
+            or version[1:3] != b"\x04\x04"
+            or version[6] not in _NTAG21X_VERSION_MODELS
+        ):
+            return None, self._tag_operation_error(
+                "unsupported_tag_model",
+                "safe writes require a recognized NTAG213, NTAG215, or NTAG216 GET_VERSION response",
+                status=version_result.err_code,
+                version_hex=version.hex().upper(),
+            )
+
+        model, dynamic_lock_page = _NTAG21X_VERSION_MODELS[version[6]]
+
+        static_result = self.__reader_a_ultralight_page_read(2)
+        if static_result.err_code != Constants.FM175XX_OK or len(static_result.out_data) != 16:
+            return None, self._tag_operation_error(
+                "lock_probe_failed",
+                "could not read NTAG static lock bytes",
+                page=2,
+                status=static_result.err_code,
+                tag_model=model,
+            )
+        static_window = bytes(static_result.out_data)
+        static_lock_0 = static_window[2]
+        static_lock_1 = static_window[3]
+        locked_pages = [
+            page
+            for page in range(4, 8)
+            if static_lock_0 & (1 << page)
+        ]
+        locked_pages.extend(
+            page
+            for page in range(8, 16)
+            if static_lock_1 & (1 << (page - 8))
+        )
+        if locked_pages:
+            return None, self._tag_operation_error(
+                "tag_locked",
+                "one or more TigerTag-owned pages are statically locked read-only",
+                tag_model=model,
+                lock_source="static",
+                locked_pages=locked_pages,
+            )
+
+        # Page 3 is included in the READ(2) window. A non-zero Type 2 Tag CC
+        # write-access nibble is not an unrestricted writable data area.
+        cc_write_access = static_window[7] & 0x0F
+        if cc_write_access != 0:
+            return None, self._tag_operation_error(
+                "tag_read_only",
+                "the NFC Type 2 capability container does not allow unrestricted writes",
+                tag_model=model,
+                cc_write_access=cc_write_access,
+            )
+
+        dynamic_result = self.__reader_a_ultralight_page_read(dynamic_lock_page)
+        if dynamic_result.err_code != Constants.FM175XX_OK or len(dynamic_result.out_data) != 16:
+            return None, self._tag_operation_error(
+                "lock_probe_failed",
+                "could not read NTAG dynamic lock and configuration bytes",
+                page=dynamic_lock_page,
+                status=dynamic_result.err_code,
+                tag_model=model,
+            )
+        dynamic_window = bytes(dynamic_result.out_data)
+        dynamic_lock_0 = dynamic_window[0]
+        if model == "NTAG213":
+            dynamic_locked_pages = [
+                page
+                for page in range(16, 24)
+                if dynamic_lock_0 & (1 << ((page - 16) // 2))
+            ]
+        else:
+            dynamic_locked_pages = list(range(16, 24)) if dynamic_lock_0 & 0x01 else []
+        if dynamic_locked_pages:
+            return None, self._tag_operation_error(
+                "tag_locked",
+                "one or more TigerTag-owned pages are dynamically locked read-only",
+                tag_model=model,
+                lock_source="dynamic",
+                locked_pages=dynamic_locked_pages,
+            )
+
+        # The READ(dynamic-lock-page) response also includes CFG0 on the next
+        # page; AUTH0 is CFG0 byte 3. This writer intentionally has no password
+        # input, so any protection beginning inside pages 4..23 is rejected.
+        auth0 = dynamic_window[7]
+        if auth0 <= TIGERTAG_OWNED_END_PAGE:
+            return None, self._tag_operation_error(
+                "tag_password_protected",
+                "password protection begins inside the TigerTag-owned region",
+                tag_model=model,
+                auth0_page=auth0,
+            )
+
+        return {
+            "tag_model": model,
+            "version_hex": version.hex().upper(),
+            "dynamic_lock_page": dynamic_lock_page,
+        }, None
+
+    def _replace_tigertag_owned_region(
+        self,
+        expected_uid: bytes,
+        target: bytes,
+        allow_unrecognized: bool,
+        allow_legacy_migration: bool,
+        action: str,
+        safety_check: Callable[[], dict[str, Any] | None] | None = None,
+    ) -> dict[str, Any]:
+        if not isinstance(expected_uid, (bytes, bytearray)) or len(expected_uid) not in (4, 7, 10):
+            return self._tag_operation_error(
+                "invalid_uid",
+                "expected_uid must be a 4, 7, or 10 byte ISO14443 UID",
+            )
+        expected_uid = bytes(expected_uid)
+        if not isinstance(target, (bytes, bytearray)) or len(target) != TIGERTAG_OWNED_LENGTH:
+            return self._tag_operation_error(
+                "invalid_payload_length",
+                f"TigerTag-owned payload must be exactly {TIGERTAG_OWNED_LENGTH} bytes",
+            )
+        target = bytes(target)
+        if action == "write" and int.from_bytes(target[:4], "big") != TIGERTAG_MAKER_ID:
+            return self._tag_operation_error(
+                "invalid_payload_header",
+                f"payload header must be TigerTag Maker 0x{TIGERTAG_MAKER_ID:08X}",
+            )
+
+        uid, error = self._activate_expected_ultralight(expected_uid)
+        if error is not None:
+            return error
+
+        # Reading all five 16-byte windows before the first write both records
+        # the existing header and proves that page 23 is addressable.
+        current, error = self._read_tigertag_owned_region()
+        if error is not None:
+            return error
+        assert current is not None
+        legacy_signature_prefix = None
+        if (
+            int.from_bytes(current[:4], "big") == TIGERTAG_PLUS_ID
+            and int.from_bytes(current[4:8], "big") == 0
+        ):
+            legacy_signature_prefix, error = self._read_legacy_signature_prefix()
+            if error is not None:
+                return error
+        existing_format, error = self._validate_existing_tigertag(
+            current,
+            allow_unrecognized,
+            allow_legacy_migration,
+            legacy_signature_prefix=legacy_signature_prefix,
+        )
+        if error is not None:
+            return error
+
+        preflight, error = self._preflight_tigertag_writable()
+        if error is not None:
+            return error
+        assert preflight is not None
+
+        # Recheck authoritative printer state after activation, UID matching,
+        # format inspection, and the page-23 capacity probe, immediately
+        # before the first mutating command. The Moonraker receive loop stays
+        # responsive while this operation waits, so this sees print starts
+        # that occurred after the API request was accepted.
+        if safety_check is not None:
+            try:
+                blocked = safety_check()
+            except Exception as exc:
+                return self._tag_operation_error(
+                    "safety_check_failed",
+                    f"pre-write safety check failed: {exc}",
+                    phase="pre_write",
+                )
+            if blocked is not None:
+                if not isinstance(blocked, dict) or blocked.get("ok") is not False:
+                    return self._tag_operation_error(
+                        "invalid_safety_check_result",
+                        "pre-write safety check returned an invalid result",
+                        phase="pre_write",
+                    )
+                return {**blocked, "phase": "pre_write"}
+
+        # Invalidate the format first. A power loss or later page error leaves
+        # a deliberately unrecognized tag instead of a valid header over a
+        # partially updated body.
+        status = self.__ntag_page_write(TIGERTAG_OWNED_START_PAGE, [0, 0, 0, 0])
+        if status != Constants.FM175XX_OK:
+            return self._tag_operation_error(
+                "header_invalidate_failed",
+                "failed to invalidate the existing TigerTag header",
+                page=TIGERTAG_OWNED_START_PAGE,
+                status=status,
+            )
+
+        for page in range(TIGERTAG_OWNED_START_PAGE + 1, TIGERTAG_OWNED_END_PAGE + 1):
+            offset = (page - TIGERTAG_OWNED_START_PAGE) * 4
+            status = self.__ntag_page_write(page, list(target[offset:offset + 4]))
+            if status != Constants.FM175XX_OK:
+                return self._tag_operation_error(
+                    "body_write_failed",
+                    f"failed to write TigerTag body page {page}",
+                    page=page,
+                    status=status,
+                    header_invalidated=True,
+                )
+
+        body_readback, error = self._read_tigertag_owned_region()
+        if error is not None:
+            return self._tag_operation_error(
+                "body_verify_read_failed",
+                error["error"],
+                page=error.get("page"),
+                status=error.get("status"),
+                cause_code=error["code"],
+                header_invalidated=True,
+            )
+        assert body_readback is not None
+        if body_readback[4:] != target[4:]:
+            return self._tag_operation_error(
+                "body_verify_failed",
+                "TigerTag body read-back did not match the requested data",
+                header_invalidated=True,
+            )
+
+        # Publish the target header only after every body page verifies. Clear
+        # operations intentionally publish a zero header here.
+        status = self.__ntag_page_write(TIGERTAG_OWNED_START_PAGE, list(target[:4]))
+        if status != Constants.FM175XX_OK:
+            return self._tag_operation_error(
+                "header_write_failed",
+                "failed to write the final TigerTag header",
+                page=TIGERTAG_OWNED_START_PAGE,
+                status=status,
+                header_invalidated=True,
+            )
+
+        full_readback, error = self._read_tigertag_owned_region()
+        if error is not None:
+            return self._tag_operation_error(
+                "verify_read_failed",
+                error["error"],
+                page=error.get("page"),
+                status=error.get("status"),
+                cause_code=error["code"],
+            )
+        if full_readback != target:
+            return self._tag_operation_error(
+                "verify_failed",
+                "full TigerTag read-back did not match the requested data",
+            )
+
+        return {
+            "ok": True,
+            "code": "written" if action == "write" else "cleared",
+            "uid": uid.hex().upper() if uid is not None else expected_uid.hex().upper(),
+            "previous_format": existing_format,
+            "start_page": TIGERTAG_OWNED_START_PAGE,
+            "end_page": TIGERTAG_OWNED_END_PAGE,
+            "bytes_written": TIGERTAG_OWNED_LENGTH,
+            "verified": True,
+            "tag_model": preflight["tag_model"],
+        }
+
+    def write_tigertag_maker(
+        self,
+        expected_uid: bytes,
+        data: bytes,
+        allow_unrecognized: bool = False,
+        allow_legacy_migration: bool = False,
+        safety_check: Callable[[], dict[str, Any] | None] | None = None,
+    ) -> dict[str, Any]:
+        """Safely write one 80-byte Maker record while a session is active."""
+        return self._replace_tigertag_owned_region(
+            expected_uid,
+            data,
+            allow_unrecognized,
+            allow_legacy_migration,
+            action="write",
+            safety_check=safety_check,
+        )
+
+    def clear_tigertag_maker(
+        self,
+        expected_uid: bytes,
+        allow_unrecognized: bool = False,
+        allow_legacy_migration: bool = False,
+        safety_check: Callable[[], dict[str, Any] | None] | None = None,
+    ) -> dict[str, Any]:
+        """Safely clear exactly pages 4..23 while a session is active."""
+        return self._replace_tigertag_owned_region(
+            expected_uid,
+            b"\x00" * TIGERTAG_OWNED_LENGTH,
+            allow_unrecognized,
+            allow_legacy_migration,
+            action="clear",
+            safety_check=safety_check,
+        )
+
     # Reader-A: NTAG/Ultralight, write a page (4 bytes)
     def __ntag_page_write(self, page: int, data: list[int]) -> int:
         cmd = Fm175xxCmdMetaData()
@@ -145,6 +590,21 @@ class Fm175xx(MifareClassicReader, MifareUltralightReader):
         if (cmd.recv_buff[0] & 0x0F) != 0x0A:
             return Constants.FM175XX_CARD_COMM_ERR
         return Constants.FM175XX_OK
+
+    def __ntag_get_version(self) -> Fm175xxReturnVal:
+        """Issue the NTAG21x GET_VERSION command (0x60)."""
+        cmd = Fm175xxCmdMetaData()
+        cmd.send_crc_en = Constants.FM175XX_SET
+        cmd.recv_crc_en = Constants.FM175XX_SET
+        cmd.send_buff = [0x60]
+        cmd.recv_buff = [0] * 8
+        cmd.bytes_to_send = 1
+        cmd.bits_to_send = 0
+        cmd.bits_to_recv = 0
+        cmd.bytes_to_recv = 8
+        cmd.timeout = 10
+        cmd.cmd = Constants.FM175XX_CMD_TRANSCEIVE
+        return self.__command_exe(cmd)
 
     # read register
     def __register_read(self, addr:int) -> int:

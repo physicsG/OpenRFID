@@ -18,6 +18,7 @@ import sys
 import os
 import json
 import threading
+import signal
 import configparser
 
 from tag.anycubic import AnycubicTagProcessor
@@ -86,6 +87,17 @@ def create_configurable_entity(key: str, config: dict) -> ConfigurableEntity:
 
 logging.basicConfig(level=logging.DEBUG)
 
+
+def _install_shutdown_signal_handlers(run: Runtime) -> None:
+    """Translate process termination into a cooperative Runtime shutdown."""
+    def request_shutdown(_signum, _frame):
+        # Keep this path lock-free. The RFID loop cancels queued work and lets
+        # an already mutating transaction reach verification and end_session.
+        run.request_shutdown()
+
+    signal.signal(signal.SIGTERM, request_shutdown)
+    signal.signal(signal.SIGINT, request_shutdown)
+
 def main():
     if len(sys.argv) < 2:
         logging.error("No config file provided")
@@ -114,6 +126,8 @@ def main():
     else:
         logging.error("Unsupported config file format, only .json is supported")
         sys.exit(1)
+
+    _install_shutdown_signal_handlers(run)
 
     for controller in run.controllers:
         threading.Thread(target=controller.loop, daemon=True).start()

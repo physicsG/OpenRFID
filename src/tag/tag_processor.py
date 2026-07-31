@@ -3,6 +3,10 @@ from filament import GenericFilament
 from config import ConfigurableEntity, TYPE_TAG_PROCESSOR
 
 class TagProcessor(ConfigurableEntity):
+    # Stable payload-format identity. Concrete processors override this so the
+    # wire value does not depend on a user-renamed configuration section.
+    tag_format = "unknown"
+
     def __init__(self, config : dict):
         super().__init__(config, TYPE_TAG_PROCESSOR)
         
