@@ -191,6 +191,7 @@ EXPECTED_TAG_FORMATS = {
     "Creality": "creality",
     "Elegoo": "elegoo",
     "OpenSpool": "openspool",
+    "OpenTag3D": "opentag3d",
     "Qidi": "qidi",
     "SpoolEase": "spoolease",
     "Snapmaker": "snapmaker",

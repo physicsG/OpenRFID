@@ -8,6 +8,8 @@ from .schema import MIME_TYPE, SCHEMAS, decode_payload, version_number
 # See "Reader Implementation Guidelines" for record selection and version handling.
 
 class OpenTag3DTagProcessor(NdefTagProcessor):
+    tag_format = "opentag3d"
+
     def __init__(self, config: dict):
         """Use the shared NDEF reader setup so this format works with existing configuration."""
         super().__init__(config)
@@ -105,4 +107,5 @@ class OpenTag3DTagProcessor(NdefTagProcessor):
             # Reuse the other processors' unknown-date sentinel for absent dates.
             manufacturing_date=data["mfg_date"] or "0001-01-01",
             td=data["td"],
+            tag_format=self.tag_format,
         )
