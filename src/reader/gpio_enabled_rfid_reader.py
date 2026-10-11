@@ -1,4 +1,5 @@
 from time import sleep
+from typing import Any, Callable
 
 from reader.mifare_classic_reader import MifareClassicReader
 from reader.mifare_ultralight_reader import MifareUltralightReader
@@ -55,3 +56,55 @@ class GpioEnabledRfidReader(MifareClassicReader, MifareUltralightReader):
             return self.rfid_reader.read_mifare_ultralight(scan_result)
         
         return None
+
+    def _write_ntag_pages_unchecked(self, start_page: int, data: bytes) -> int | None:
+        """Private passthrough for the legacy diagnostic NTAG writer."""
+        write = getattr(self.rfid_reader, "_write_ntag_pages_unchecked", None)
+        if not callable(write):
+            return None
+        return write(start_page, data)
+
+    def write_tigertag_maker(
+        self,
+        expected_uid: bytes,
+        data: bytes,
+        allow_unrecognized: bool = False,
+        allow_legacy_migration: bool = False,
+        safety_check: Callable[[], dict[str, Any] | None] | None = None,
+    ) -> dict:
+        """Delegate a safe write after the runtime has opened this session."""
+        if not isinstance(self.rfid_reader, MifareUltralightReader):
+            return {
+                "ok": False,
+                "code": "reader_not_supported",
+                "error": "inner reader does not support safe TigerTag writes",
+            }
+        kwargs = {
+            "allow_unrecognized": allow_unrecognized,
+            "allow_legacy_migration": allow_legacy_migration,
+        }
+        if safety_check is not None:
+            kwargs["safety_check"] = safety_check
+        return self.rfid_reader.write_tigertag_maker(expected_uid, data, **kwargs)
+
+    def clear_tigertag_maker(
+        self,
+        expected_uid: bytes,
+        allow_unrecognized: bool = False,
+        allow_legacy_migration: bool = False,
+        safety_check: Callable[[], dict[str, Any] | None] | None = None,
+    ) -> dict:
+        """Delegate a safe clear after the runtime has opened this session."""
+        if not isinstance(self.rfid_reader, MifareUltralightReader):
+            return {
+                "ok": False,
+                "code": "reader_not_supported",
+                "error": "inner reader does not support safe TigerTag clears",
+            }
+        kwargs = {
+            "allow_unrecognized": allow_unrecognized,
+            "allow_legacy_migration": allow_legacy_migration,
+        }
+        if safety_check is not None:
+            kwargs["safety_check"] = safety_check
+        return self.rfid_reader.clear_tigertag_maker(expected_uid, **kwargs)

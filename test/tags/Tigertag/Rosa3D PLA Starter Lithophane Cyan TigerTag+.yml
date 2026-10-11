@@ -1,4 +1,4 @@
-bed_temp_c: 0.0
+bed_temp_c: 40.0
 colors:
 - 0xFF00A3E0
 diameter_mm: 1.75
@@ -15,3 +15,5 @@ td: 0.0
 type: PLA
 unique_id: f90c55783e801ae94761b4ac89be2c9699de24bd1f946b9ee523c5d58b325a04
 weight_grams: 1000.0
+bed_temp_max_c: 60.0
+message: ''

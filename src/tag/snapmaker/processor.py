@@ -11,6 +11,8 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.exceptions import InvalidSignature
 
 class SnapmakerTagProcessor(MifareClassicTagProcessor):
+    tag_format = "snapmaker"
+
     def __init__(self, config : dict):
         super().__init__(config)
 
@@ -126,6 +128,7 @@ class SnapmakerTagProcessor(MifareClassicTagProcessor):
 
         return GenericFilament(
             source_processor=self.name,
+            tag_format=self.tag_format,
             unique_id=GenericFilament.generate_unique_id("Snapmaker", vendor, manufacturer, main_type, sub_type, argb_color, weight_grams, sku, tray),
             manufacturer=vendor,
             type=main_type,

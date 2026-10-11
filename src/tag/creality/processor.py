@@ -7,6 +7,8 @@ from cryptography.hazmat.backends import default_backend
 from . import constants as Constants
 
 class CrealityTagProcessor(MifareClassicTagProcessor):
+    tag_format = "creality"
+
     def __init__(self, config : dict):
         super().__init__(config)
 
@@ -100,6 +102,7 @@ class CrealityTagProcessor(MifareClassicTagProcessor):
 
         return GenericFilament(
             source_processor=self.name,
+            tag_format=self.tag_format,
             unique_id=GenericFilament.generate_unique_id("Creality", data_str),
             manufacturer="Creality",
             type=extra_data.type,

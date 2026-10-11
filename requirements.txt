@@ -2,6 +2,7 @@ requests
 jinja2
 spidev
 cryptography
+tigertag[verify] @ git+https://github.com/TigerTag-Project/TigerTag-SDK-Python.git@f3e2e2e8a1fdf88f91fb43ca4b5c5fbfb88f81af
 pytest
 PyYAML
 # libgpiod 1.6.4

@@ -6,6 +6,8 @@ import tag.binary as binary
 from . import constants as Constants
 
 class ElegooTagProcessor(MifareUltralightTagProcessor):
+    tag_format = "elegoo"
+
     def __init__(self, config : dict):
         super().__init__(config)
 
@@ -44,6 +46,7 @@ class ElegooTagProcessor(MifareUltralightTagProcessor):
 
         return GenericFilament(
             source_processor=self.name,
+            tag_format=self.tag_format,
             unique_id=GenericFilament.generate_unique_id("Elegoo", material_type, material_subtype, argb, diameter, weight_grams),
             manufacturer="Elegoo",
             type=material.material_type,

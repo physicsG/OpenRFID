@@ -1,0 +1,5 @@
+Safe TigerTag Maker writer contract v2
+
+This marker is installed only by OpenRFID revisions containing the fixed
+80-byte, UID-bound, lock-preflighted, read-back-verified writer and guarded
+Moonraker API. Firmware integrations must keep writes disabled when absent.

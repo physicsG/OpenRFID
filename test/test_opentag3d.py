@@ -124,9 +124,14 @@ def test_invalid_text_date_time_or_temperature(processor, scan, payload, offset,
     assert processor.process_tag(scan, tag(record(payload))) is None
 
 
-def test_unknown_material_fails_cleanly(processor, scan, payload):
+def test_unknown_material_is_kept_but_unsupported(processor, scan, payload):
+    # GenericFilament keeps decoded materials outside the profile whitelist
+    # visible and flags them instead of rejecting the whole tag.
     payload[2:7] = b"XXXXX"
-    assert processor.process_tag(scan, tag(record(payload))) is None
+    result = processor.process_tag(scan, tag(record(payload)))
+    assert result is not None
+    assert result.type == "XXXXX"
+    assert result.type_supported is False
 
 
 def test_unrelated_mime(processor, scan, payload):
