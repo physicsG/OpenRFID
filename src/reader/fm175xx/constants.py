@@ -114,15 +114,16 @@ FM175XX_CW_ENABLE                       = 3
 FM175XX_CARD_INFO_READ                  = 0
 FM175XX_CARD_INFO_CLEAR                 = 1
 
-# About NTAG215 Card
-FM175XX_NTAG215_TOTAL_PAGES             = 135
-FM175XX_NTAG215_USER_START_PAGE         = 4
-FM175XX_NTAG215_USER_END_PAGE           = 129
-FM175XX_NTAG215_BYTES_PER_PAGE          = 4
-FM175XX_NTAG215_TOTAL_SIZE              = 540
-FM175XX_ULTRALIGHT_TOTAL_PAGES          = 44
-
-FM175XX_ULTRALIGHT_VALID_END_PAGES      = [FM175XX_NTAG215_TOTAL_PAGES, FM175XX_ULTRALIGHT_TOTAL_PAGES]
+# Ultralight / NTAG Type 2 tags
+FM175XX_ULTRALIGHT_BYTES_PER_PAGE       = 4
+# Default CC size byte -> physical page count, including header and configuration.
+# CC sizes describe the NDEF area and are smaller than the physical NTAG memory.
+FM175XX_ULTRALIGHT_PAGE_COUNTS_BY_CC_SIZE = {
+    0x06: 16,   # MIFARE Ultralight
+    0x12: 45,   # NTAG213
+    0x3E: 135,  # NTAG215
+    0x6D: 231,  # NTAG216
+}
 
 # About M1 Card
 # EEPROM
